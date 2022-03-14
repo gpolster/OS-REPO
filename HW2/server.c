@@ -379,6 +379,12 @@ static int maxCpu = MAX_CPU;
 static int NUMBER_OF_THREADS;     /* Maximum CPU time per process */
 pthread_t *threadPool; 
 
+int *intArray;  //Queue variables 
+int front = 0;
+int rear = -1;
+int itemCount = 0;
+int buffers;
+
 /* Forward reference */
 static void Malfunction(int errNo, const char *zFormat, ...);
 
@@ -2551,6 +2557,46 @@ int http_server(const char *zPort, int localOnly, int * httpConnection){
   exit(1);
 }
 
+int peek() {      //START OF QUEUE
+   return intArray[front];
+}
+
+int isEmpty() {       //IS QUEUE EMPTY
+   return itemCount == 0;
+}
+
+int isFull() {          //IS QUEUE FULL
+   return itemCount == buffers;
+}
+
+int size() {        //AMOUNT IN QUEUE
+   return itemCount;
+}  
+
+void insert(int data) {     //INSERT INTO QUEUE
+
+   if(!isFull()) {
+	
+      if(rear == buffers-1) {
+         rear = -1;            
+      }       
+
+      intArray[++rear] = data;
+      itemCount++;
+   }
+}
+
+int removeData() {    //REMOVE FROM QUEUE
+   int data = intArray[front++];
+	
+   if(front == buffers) {
+      front = 0;
+   }
+	
+   itemCount--;
+   return data;  
+}                     //END OF QUEUE
+
 int main(int argc, const char **argv){
   int i;                     /* Loop counter */
   const char *zPermUser = 0; /* Run daemon with this user's permissions */
@@ -2610,7 +2656,11 @@ int main(int argc, const char **argv){
     }else if( strcmp(z, "-threads")==0 ){     // WHERE WE GET NUMBER OF THREADS
         NUMBER_OF_THREADS = atoi(zArg);
         threadPool = malloc ( NUMBER_OF_THREADS * sizeof *threadPool );
-    }else if( strcmp(z, "-debug")==0 ){
+    }else if( strcmp(z, "-buffers")==0 ){     // WHERE WE GET NUMBER OF BUFFERS
+        buffers = atoi(zArg);
+        intArray = malloc (buffers * sizeof *intArray); //Initializes the size of queue
+    }
+    else if( strcmp(z, "-debug")==0 ){
       if( atoi(zArg) ){
         useTimeout = 0;
       }
