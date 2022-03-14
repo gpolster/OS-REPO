@@ -277,6 +277,7 @@
 #include <errno.h>
 #include <sys/resource.h>
 #include <signal.h>
+#include <sys/queue.h>
 #ifdef linux
 #include <sys/sendfile.h>
 #endif
@@ -374,7 +375,9 @@ static char *default_path = "/bin:/usr/bin";  /* Default PATH variable */
 static char *zScgi = 0;          /* Value of the SCGI env variable */
 static int rangeStart = 0;       /* Start of a Range: request */
 static int rangeEnd = 0;         /* End of a Range: request */
-static int maxCpu = MAX_CPU;     /* Maximum CPU time per process */
+static int maxCpu = MAX_CPU;
+static int NUMBER_OF_THREADS;     /* Maximum CPU time per process */
+pthread_t *threadPool; 
 
 /* Forward reference */
 static void Malfunction(int errNo, const char *zFormat, ...);
@@ -2432,6 +2435,7 @@ int http_server(const char *zPort, int localOnly, int * httpConnection){
   int i, n;
   int maxFd = -1;
   
+  
   memset(&sHints, 0, sizeof(sHints));
   if( ipv4Only ){
     sHints.ai_family = PF_INET;
@@ -2484,7 +2488,20 @@ int http_server(const char *zPort, int localOnly, int * httpConnection){
     fprintf(stderr, "cannot open any sockets\n");
     return 1;
   }
+  
+  int status, i;                //Textboook code starts here      
+  for(i=0; i < NUMBER_OF_THREADS; i++) {    //makes the pool of threads
 
+    status = pthread_create(&threadPool[i], NULL, NULL, (void *)i); // PASSING IN NULL INSTEAD OF A START ROUTINE, "SECOND NULL"
+  } 
+  if (status != 0) { 
+    printf("Oops. pthread");
+    exit(-1); 
+    
+  }         // textbook code ends here
+  // while(connection = accept(listener[i], &inaddr.sa, &lenaddr)) {    //nir code need to understand  
+
+  // }
   while( 1 ){
     if( nchildren>MAX_PARALLEL ){
       /* Slow down if connections are arriving too fast */
@@ -2590,6 +2607,9 @@ int main(int argc, const char **argv){
       if( atoi(zArg)==0 ){
         useChrootJail = 0;
       }
+    }else if( strcmp(z, "-threads")==0 ){     // WHERE WE GET NUMBER OF THREADS
+        NUMBER_OF_THREADS = atoi(zArg);
+        threadPool = malloc ( NUMBER_OF_THREADS * sizeof *threadPool );
     }else if( strcmp(z, "-debug")==0 ){
       if( atoi(zArg) ){
         useTimeout = 0;
