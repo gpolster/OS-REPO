@@ -278,6 +278,7 @@
 #include <sys/resource.h>
 #include <signal.h>
 #include <sys/queue.h>
+#include <pthread.h>
 #ifdef linux
 #include <sys/sendfile.h>
 #endif
@@ -377,14 +378,22 @@ static int rangeStart = 0;       /* Start of a Range: request */
 static int rangeEnd = 0;         /* End of a Range: request */
 static int maxCpu = MAX_CPU;
 static int NUMBER_OF_THREADS;     /* Maximum CPU time per process */
-pthread_t *threadPool; 
+pthread_t *threadPool;
+pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t condition_var = PTHREAD_COND_INITIALIZER;
 
-int *intArray;  //Queue variables 
+int* *intArray;  //Queue variables
 int front = 0;
 int rear = -1;
 int itemCount = 0;
 int buffers;
-
+void * thread_function(void *arg);
+int* peek();
+int isEmpty();
+int isFull();
+int size();
+void insert(int* data);
+int* removeData();
 /* Forward reference */
 static void Malfunction(int errNo, const char *zFormat, ...);
 
@@ -2428,18 +2437,18 @@ typedef union {
 int http_server(const char *zPort, int localOnly, int * httpConnection){
   int listener[20];            /* The server sockets */
   int connection;              /* A socket for each individual connection */
-  fd_set readfds;              /* Set of file descriptors for select() */
+  //fd_set readfds;              /* Set of file descriptors for select() */
   address inaddr;              /* Remote address */
   socklen_t lenaddr;           /* Length of the inaddr structure */
-  int child;                   /* PID of the child process */
-  int nchildren = 0;           /* Number of child processes */
-  struct timeval delay;        /* How long to wait inside select() */
+  //int child;                   /* PID of the child process */
+  //int nchildren = 0;           /* Number of child processes */
+  //struct timeval delay;        /* How long to wait inside select() */
   int opt = 1;                 /* setsockopt flag */
   struct addrinfo sHints;      /* Address hints */
   struct addrinfo *pAddrs, *p; /* */
   int rc;                      /* Result code */
   int i, n;
-  int maxFd = -1;
+  //int maxFd = -1;
   
   
   memset(&sHints, 0, sizeof(sHints));
@@ -2495,69 +2504,103 @@ int http_server(const char *zPort, int localOnly, int * httpConnection){
     return 1;
   }
   
-  int status, i;                //Textboook code starts here      
-  for(i=0; i < NUMBER_OF_THREADS; i++) {    //makes the pool of threads
+  int status, num;                //Textboook code starts here
+  for(num = 0; num < NUMBER_OF_THREADS; num++) {    //makes the pool of threads
+      status = pthread_create(&threadPool[num], NULL, thread_function, NULL); // PASSING IN NULL INSTEAD OF A START ROUTINE, "SECOND NULL"
+      if (status != 0) {
+          printf("Oops. pthread");
+          exit(-1);
 
-    status = pthread_create(&threadPool[i], NULL, NULL, (void *)i); // PASSING IN NULL INSTEAD OF A START ROUTINE, "SECOND NULL"
-  } 
-  if (status != 0) { 
-    printf("Oops. pthread");
-    exit(-1); 
-    
-  }         // textbook code ends here
+      }
+  }
+          // textbook code ends here
   // while(connection = accept(listener[i], &inaddr.sa, &lenaddr)) {    //nir code need to understand  
 
   // }
+
+
   while( 1 ){
-    if( nchildren>MAX_PARALLEL ){
-      /* Slow down if connections are arriving too fast */
-      sleep( nchildren-MAX_PARALLEL );
-    }
-    delay.tv_sec = 60;
-    delay.tv_usec = 0;
-    FD_ZERO(&readfds);
-    for(i=0; i<n; i++){
-      assert( listener[i]>=0 );
-      FD_SET( listener[i], &readfds);
-      if( listener[i]>maxFd ) maxFd = listener[i];
-    }
-    select( maxFd+1, &readfds, 0, 0, &delay);
-    for(i=0; i<n; i++){
-      if( FD_ISSET(listener[i], &readfds) ){
-        lenaddr = sizeof(inaddr);
-        connection = accept(listener[i], &inaddr.sa, &lenaddr);
-        if( connection>=0 ){
-          child = fork();
-          if( child!=0 ){
-            if( child>0 ) nchildren++;
-            close(connection);
-            /* printf("subprocess %d started...\n", child); fflush(stdout); */
-          }else{
-            int nErr = 0, fd;
-            close(0);
-            fd = dup(connection);
-            if( fd!=0 ) nErr++;
-            close(1);
-            fd = dup(connection);
-            if( fd!=1 ) nErr++;
-            close(connection);
-            *httpConnection = fd;
-            return nErr;
-          }
-        }
+
+          //Theoretical code that we might want to replace the while loop courtesy of jacob sorber
+      for(i=0; i<n; i++){
+          connection = accept(listener[i], &inaddr.sa, &lenaddr);
+          int *pclient = malloc(sizeof(int));
+          *pclient = connection;
+          pthread_mutex_lock(&mutex);
+          insert(pclient);
+          pthread_cond_signal(&condition_var);
+          pthread_mutex_unlock(&mutex);
       }
-      /* Bury dead children */
-      while( (child = waitpid(0, 0, WNOHANG))>0 ){
-        /* printf("process %d ends\n", child); fflush(stdout); */
-        nchildren--;
-      }
-    }
+
+
+
+
+
+//    if( nchildren > MAX_PARALLEL ){
+//      /* Slow down if connections are arriving too fast */
+//      sleep( nchildren-MAX_PARALLEL );
+//    }
+//    delay.tv_sec = 60;
+//    delay.tv_usec = 0;
+//    FD_ZERO(&readfds);
+//    for(i=0; i<n; i++){
+//      assert( listener[i]>=0 );
+//      FD_SET( listener[i], &readfds);
+//      if( listener[i]>maxFd ) maxFd = listener[i];
+//    }
+//    select( maxFd+1, &readfds, 0, 0, &delay);
+//    for(i=0; i<n; i++){
+//      if( FD_ISSET(listener[i], &readfds) ){
+//        lenaddr = sizeof(inaddr);
+//        connection = accept(listener[i], &inaddr.sa, &lenaddr); //I THINK WE DEFINITELY WANT TO HAVE THIS CODE SOMEWHERE
+//                                                                //AND THEN I THINK THAT (FOR NOW) THIS IS WHAT WE SHOULD ENQUEUE
+//        if( connection>=0 ){
+//          child = fork();
+//          if( child!=0 ){
+//            if( child>0 ) nchildren++;
+//            close(connection);
+//            /* printf("subprocess %d started...\n", child); fflush(stdout); */
+//          }else{
+//            int nErr = 0, fd;
+//            close(0);
+//            fd = dup(connection);
+//            if( fd!=0 ) nErr++;
+//            close(1);
+//            fd = dup(connection);
+//            if( fd!=1 ) nErr++;
+//            close(connection);
+//            *httpConnection = fd;
+//            return nErr;
+//          }
+//        }
+//      }
+//      /* Bury dead children */
+//      while( (child = waitpid(0, 0, WNOHANG))>0 ){
+//        /* printf("process %d ends\n", child); fflush(stdout); */
+//        nchildren--;
+//      }
+//    }
   }
   /* NOT REACHED */  
   exit(1);
 }
+void * thread_function(void *arg){
+    while(1){
+        int *pclient;
+        pthread_mutex_lock(&mutex);
 
-int peek() {      //START OF QUEUE
+        if ((pclient = removeData()) == NULL){
+            pthread_cond_wait(&condition_var, &mutex);
+            pclient =  removeData();
+        }
+        pthread_mutex_unlock(&mutex);
+        if (pclient != NULL){
+            //handles the connection
+        }
+    }
+}
+
+int* peek() {      //START OF QUEUE
    return intArray[front];
 }
 
@@ -2573,7 +2616,7 @@ int size() {        //AMOUNT IN QUEUE
    return itemCount;
 }  
 
-void insert(int data) {     //INSERT INTO QUEUE
+void insert(int* data) {     //INSERT INTO QUEUE
 
    if(!isFull()) {
 	
@@ -2586,8 +2629,11 @@ void insert(int data) {     //INSERT INTO QUEUE
    }
 }
 
-int removeData() {    //REMOVE FROM QUEUE
-   int data = intArray[front++];
+int* removeData() {    //REMOVE FROM QUEUE
+    if (isEmpty()){     //IF ITS EMPTY, RETURNS NULL
+        return NULL;
+    }
+   int* data = intArray[front++];
 	
    if(front == buffers) {
       front = 0;
