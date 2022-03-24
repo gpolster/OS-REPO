@@ -2437,18 +2437,18 @@ typedef union {
 int http_server(const char *zPort, int localOnly, int * httpConnection){
   int listener[20];            /* The server sockets */
   int connection;              /* A socket for each individual connection */
-  //fd_set readfds;              /* Set of file descriptors for select() */
+  fd_set readfds;              /* Set of file descriptors for select() */
   address inaddr;              /* Remote address */
   socklen_t lenaddr;           /* Length of the inaddr structure */
   //int child;                   /* PID of the child process */
-  //int nchildren = 0;           /* Number of child processes */
-  //struct timeval delay;        /* How long to wait inside select() */
+  int nchildren = 0;           /* Number of child processes */
+  struct timeval delay;        /* How long to wait inside select() */
   int opt = 1;                 /* setsockopt flag */
   struct addrinfo sHints;      /* Address hints */
   struct addrinfo *pAddrs, *p; /* */
   int rc;                      /* Result code */
   int i, n;
-  //int maxFd = -1;
+  int maxFd = -1;
   
   
   memset(&sHints, 0, sizeof(sHints));
@@ -2505,51 +2505,97 @@ int http_server(const char *zPort, int localOnly, int * httpConnection){
   }
   
   int status, num;                //Textboook code starts here
+  //NUMBER_OF_THREADS = 1;
   for(num = 0; num < NUMBER_OF_THREADS; num++) {    //makes the pool of threads
+      printf("before threading\n");
       status = pthread_create(&threadPool[num], NULL, thread_function, NULL); // PASSING IN NULL INSTEAD OF A START ROUTINE, "SECOND NULL"
+      printf("after threading\n");
       if (status != 0) {
           printf("Oops. pthread");
           exit(-1);
 
       }
   }
-          // textbook code ends here
-  // while(connection = accept(listener[i], &inaddr.sa, &lenaddr)) {    //nir code need to understand  
-
-  // }
-
-
-  while( 1 ){
-
-          //Theoretical code that we might want to replace the while loop courtesy of jacob sorber
-      for(i=0; i<n; i++){
-          connection = accept(listener[i], &inaddr.sa, &lenaddr);
-          int *pclient = malloc(sizeof(int));
-          *pclient = connection;
-          pthread_mutex_lock(&mutex);
-          insert(pclient);
-          pthread_cond_signal(&condition_var);
-          pthread_mutex_unlock(&mutex);
-      }
 
 
 
+  while( 1 ) {
+
+      //Theoretical code that we might want to replace the while loop courtesy of jacob sorber
+//      for(i=0; i<n; i++){
+    //      if( FD_ISSET(listener[i], &readfds) ){
+    //          lenaddr = sizeof(inaddr);
+    //          connection = accept(listener[i], &inaddr.sa, &lenaddr); //I THINK WE DEFINITELY WANT TO HAVE THIS CODE SOMEWHERE
+    //          //AND THEN I THINK THAT (FOR NOW) THIS IS WHAT WE SHOULD ENQUEUE
+    //          if( connection>=0 ){
+        //          connection = accept(listener[i], &inaddr.sa, &lenaddr);
+        //          int *pclient = malloc(sizeof(int));
+        //          *pclient = connection;
+        //          pthread_mutex_lock(&mutex);
+        //          insert(pclient);
+        //          pthread_cond_signal(&condition_var);
+        //          pthread_mutex_unlock(&mutex);
+        //          //pthread_detach()
+//                  int nErr = 0, fd;
+//                  close(0);
+//                  fd = dup(connection);
+//                  if( fd!=0 ) nErr++;
+//                  close(1);
+//                  fd = dup(connection);
+//                  if( fd!=1 ) nErr++;
+//                  close(connection);
+//                  *httpConnection = fd;
+//                  return nErr;
+    //          }
+//          }
+//      }
 
 
-//    if( nchildren > MAX_PARALLEL ){
-//      /* Slow down if connections are arriving too fast */
-//      sleep( nchildren-MAX_PARALLEL );
-//    }
-//    delay.tv_sec = 60;
-//    delay.tv_usec = 0;
-//    FD_ZERO(&readfds);
-//    for(i=0; i<n; i++){
-//      assert( listener[i]>=0 );
-//      FD_SET( listener[i], &readfds);
-//      if( listener[i]>maxFd ) maxFd = listener[i];
-//    }
-//    select( maxFd+1, &readfds, 0, 0, &delay);
-//    for(i=0; i<n; i++){
+
+
+
+    if( nchildren > MAX_PARALLEL ){
+      /* Slow down if connections are arriving too fast */
+      sleep( nchildren-MAX_PARALLEL );
+    }
+    delay.tv_sec = 60;
+    delay.tv_usec = 0;
+    FD_ZERO(&readfds);
+    for(i=0; i<n; i++){
+      assert( listener[i]>=0 );
+      FD_SET( listener[i], &readfds);
+      if( listener[i]>maxFd ) maxFd = listener[i];
+    }
+    select( maxFd+1, &readfds, 0, 0, &delay);
+    for(i=0; i<n; i++){
+        //printf("hello");
+        if( FD_ISSET(listener[i], &readfds) ){
+          lenaddr = sizeof(inaddr);
+          connection = accept(listener[i], &inaddr.sa, &lenaddr); //I THINK WE DEFINITELY WANT TO HAVE THIS CODE SOMEWHERE
+          //AND THEN I THINK THAT (FOR NOW) THIS IS WHAT WE SHOULD ENQUEUE
+          if( connection>=0 ){
+              int *pclient = malloc(sizeof(int));
+              *pclient = connection;
+              pthread_mutex_lock(&mutex);
+              insert(pclient);
+              pthread_cond_signal(&condition_var);
+              pthread_mutex_unlock(&mutex);
+            //pthread_detach();
+            int nErr = 0;
+//            close(0);
+//            fd = dup(connection);
+//            if( fd!=0 )
+//                nErr++;
+//            close(1);
+//            fd = dup(connection);
+//            if( fd!=1 )
+//                nErr++;
+//            close(connection);
+//            *httpConnection = fd;
+            return nErr;
+          }
+        }
+
 //      if( FD_ISSET(listener[i], &readfds) ){
 //        lenaddr = sizeof(inaddr);
 //        connection = accept(listener[i], &inaddr.sa, &lenaddr); //I THINK WE DEFINITELY WANT TO HAVE THIS CODE SOMEWHERE
@@ -2579,7 +2625,7 @@ int http_server(const char *zPort, int localOnly, int * httpConnection){
 //        /* printf("process %d ends\n", child); fflush(stdout); */
 //        nchildren--;
 //      }
-//    }
+    }
   }
   /* NOT REACHED */  
   exit(1);
