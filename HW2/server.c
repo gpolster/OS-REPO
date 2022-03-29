@@ -381,6 +381,7 @@ static int NUMBER_OF_THREADS;     /* Maximum CPU time per process */
 pthread_t *threadPool;
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t condition_var = PTHREAD_COND_INITIALIZER;
+static __thread FILE* file;
 
 int* *intArray;  //Queue variables
 int front = 0;
@@ -756,10 +757,11 @@ void TestParseRfc822Date(void){
 ** Print the first line of a response followed by the server type.
 */
 static void StartResponse(const char *zResultCode){
+    printf("in start response\n");
   time_t now;
   time(&now);
   if( statusSent ) return;
-  nOut += althttpd_printf("%s %s\r\n",
+  nOut += fprintf(file,"%s %s\r\n",
                           zProtocol ? zProtocol : "HTTP/1.1",
                           zResultCode);
   strncpy(zReplyStatus, zResultCode, 3);
@@ -768,9 +770,9 @@ static void StartResponse(const char *zResultCode){
     closeConnection = 1;
   }
   if( closeConnection ){
-    nOut += althttpd_printf("Connection: close\r\n");
+    nOut += fprintf(file,"Connection: close\r\n");
   }else{
-    nOut += althttpd_printf("Connection: keep-alive\r\n");
+    nOut += fprintf(file,"Connection: keep-alive\r\n");
   }
   nOut += DateTag("Date", now);
   
@@ -1365,7 +1367,9 @@ static int countSlashes(const char *z){
 ** connection is read instead.
 */
 static char *althttpd_fgets(char *s, int size, FILE *in){
+    printf("nevermind it stops here\n");
   if( useHttps!=2 ){
+      printf("actually here\n");
     return fgets(s, size, in);
   }
   Malfunction(508,"SSL not available");
@@ -1452,13 +1456,18 @@ static void xferBytes(FILE *in, FILE *out, int nXfer, int nSkip){
 static int SendFile(
   const char *zFile,      /* Name of the file to send */
   int lenFile,            /* Length of the zFile name in bytes */
-  struct stat *pStat      /* Result of a stat() against zFile */
+  struct stat *pStat,      /* Result of a stat() against zFile */
+  int socketID
 ){
-  const char *zContentType;
-  time_t t;
-  FILE *in;
-  char zETag[100];
-
+    printf("in sendFile\n");
+    const char *zContentType;
+    time_t t;
+    FILE *in;
+    char zETag[100];
+    if(file == NULL) {
+        file = fdopen(socketID, "r+");      //MIGHT NEED TO MAKE SOCKET ID A GLOBAL LOCAL VARIABLE
+    }                                       // CHECK PIAZZA IF CONFUSED
+    printf("file opened in sendfile\n");
   zContentType = GetMimeType(zFile, lenFile);
   if( zPostData ){ free(zPostData); zPostData = 0; }
   sprintf(zETag, "m%xs%x", (int)pStat->st_mtime, (int)pStat->st_size);
@@ -1469,10 +1478,10 @@ static int SendFile(
   ){
     StartResponse("304 Not Modified");
     nOut += DateTag("Last-Modified", pStat->st_mtime);
-    nOut += althttpd_printf("Cache-Control: max-age=%d\r\n", mxAge);
-    nOut += althttpd_printf("ETag: \"%s\"\r\n", zETag);
-    nOut += althttpd_printf("\r\n");
-    fflush(stdout);
+    nOut += fprintf(file, "Cache-Control: max-age=%d\r\n", mxAge);
+    nOut += fprintf(file, "ETag: \"%s\"\r\n", zETag);
+    nOut += fprintf(file, "\r\n");
+    fflush(file);
     MakeLogEntry(0, 470);  /* LOG: ETag Cache Hit */
     return 1;
   }
@@ -1483,23 +1492,25 @@ static int SendFile(
     if( rangeEnd>=pStat->st_size ){
       rangeEnd = pStat->st_size-1;
     }
-    nOut += althttpd_printf("Content-Range: bytes %d-%d/%d\r\n",
+    nOut += fprintf(file, "Content-Range: bytes %d-%d/%d\r\n",
                     rangeStart, rangeEnd, (int)pStat->st_size);
     pStat->st_size = rangeEnd + 1 - rangeStart;
   }else{
     StartResponse("200 OK");
     rangeStart = 0;
   }
+
+
   nOut += DateTag("Last-Modified", pStat->st_mtime);
-  nOut += althttpd_printf("Cache-Control: max-age=%d\r\n", mxAge);
-  nOut += althttpd_printf("ETag: \"%s\"\r\n", zETag);
-  nOut += althttpd_printf("Content-type: %s; charset=utf-8\r\n",zContentType);
-  nOut += althttpd_printf("Content-length: %d\r\n\r\n",(int)pStat->st_size);
-  fflush(stdout);
+  nOut += fprintf(file, "Cache-Control: max-age=%d\r\n", mxAge);
+  nOut += fprintf(file, "ETag: \"%s\"\r\n", zETag);
+  nOut += fprintf(file, "Content-type: %s; charset=utf-8\r\n",zContentType);
+  nOut += fprintf(file, "Content-length: %d\r\n\r\n",(int)pStat->st_size);
+  fflush(file);
   if( strcmp(zMethod,"HEAD")==0 ){
     MakeLogEntry(0, 2); /* LOG: Normal HEAD reply */
     fclose(in);
-    fflush(stdout);
+    fflush(file);
     return 1;
   }
 #ifdef linux
@@ -1509,8 +1520,9 @@ static int SendFile(
   }else
 #endif
   {
-    xferBytes(in, stdout, (int)pStat->st_size, rangeStart);
+    xferBytes(in, file, (int)pStat->st_size, rangeStart);
   }
+  close(socketID);
   fclose(in);
   return 0;
 }
@@ -1573,12 +1585,12 @@ static void CgiHandleReply(FILE *in, int isNPH){
       RemoveNewline(zLine);
       z = &zLine[10];
       while( isspace(*(unsigned char*)z) ){ z++; }
-      nOut += althttpd_printf("Location: %s\r\n",z);
+      nOut += fprintf(file,"Location: %s\r\n",z);
       rangeEnd = 0;
     }else if( strncasecmp(zLine,"Status:",7)==0 ){
       int i;
       for(i=7; isspace((unsigned char)zLine[i]); i++){}
-      nOut += althttpd_printf("%s %s", zProtocol, &zLine[i]);
+      nOut += fprintf(file,"%s %s", zProtocol, &zLine[i]);
       strncpy(zReplyStatus, &zLine[i], 3);
       zReplyStatus[3] = 0;
       iStatus = atoi(zReplyStatus);
@@ -1607,7 +1619,7 @@ static void CgiHandleReply(FILE *in, int isNPH){
     if( rangeEnd>=contentLength ){
       rangeEnd = contentLength-1;
     }
-    nOut += althttpd_printf("Content-Range: bytes %d-%d/%d\r\n",
+    nOut += fprintf(file,"Content-Range: bytes %d-%d/%d\r\n",
                             rangeStart, rangeEnd, contentLength);
     contentLength = rangeEnd + 1 - rangeStart;
   }else{
@@ -1620,9 +1632,9 @@ static void CgiHandleReply(FILE *in, int isNPH){
     nRes = 0;
   }
   if( iStatus==304 ){
-    nOut += althttpd_printf("\r\n\r\n");
+    nOut += fprintf(file,"\r\n\r\n");
   }else if( seenContentLength ){
-    nOut += althttpd_printf("Content-length: %d\r\n\r\n", contentLength);
+    nOut += fprintf(file,"Content-length: %d\r\n\r\n", contentLength);
     xferBytes(in, stdout, contentLength, rangeStart);
   }else{
     while( (c = getc(in))!=EOF ){
@@ -1637,10 +1649,10 @@ static void CgiHandleReply(FILE *in, int isNPH){
     }
     if( nRes ){
       aRes[nRes] = 0;
-      nOut += althttpd_printf("Content-length: %d\r\n\r\n", (int)nRes);
+      nOut += fprintf(file,"Content-length: %d\r\n\r\n", (int)nRes);
       nOut += althttpd_fwrite(aRes, nRes, 1, stdout);
     }else{
-      nOut += althttpd_printf("Content-length: 0\r\n\r\n");
+      nOut += fprintf(file,"Content-length: 0\r\n\r\n");
     }
   }
   free(aRes);
@@ -1747,7 +1759,7 @@ static void SendScgiRequest(const char *zFile, const char *zScript){
         rc = stat(zFallback, &statbuf);
         if( rc==0 && S_ISREG(statbuf.st_mode) && access(zFallback,R_OK)==0 ){
           closeConnection = 1;
-          rc = SendFile(zFallback, (int)strlen(zFallback), &statbuf);
+          //rc = SendFile(zFallback, (int)strlen(zFallback), &statbuf);
           free(zFallback);
           exit(0);
         }else{
@@ -1839,6 +1851,9 @@ void ProcessOneRequest(int forceClose, int socketId){
   char *z;                  /* Used to parse up a string */
   struct stat statbuf;      /* Information about the file to be retrieved */
   FILE *in;                 /* For reading from CGI scripts */
+  printf("opening file\n");
+  file =fdopen(socketId, "r+");
+    printf("file opened\n");
 #ifdef LOG_HEADER
   FILE *hdrLog = 0;         /* Log file for complete header content */
 #endif
@@ -1868,8 +1883,12 @@ void ProcessOneRequest(int forceClose, int socketId){
   */
   omitLog = 1;
   if( althttpd_fgets(zLine,sizeof(zLine),stdin)==0 ){
+      printf("I found the spot that it stops!\n");
     exit(0);
+  } else {
+      printf("or did i?\n");
   }
+
   gettimeofday(&beginTime, 0);
   omitLog = 0;
   nIn += strlen(zLine);
@@ -1880,7 +1899,7 @@ void ProcessOneRequest(int forceClose, int socketId){
   zProtocol = StrDup(GetFirstElement(z,&z));
   if( zProtocol==0 || strncmp(zProtocol,"HTTP/",5)!=0 || strlen(zProtocol)!=8 ){
     StartResponse("400 Bad Request");
-    nOut += althttpd_printf(
+    nOut += fprintf(file,
       "Content-type: text/plain; charset=utf-8\r\n"
       "\r\n"
       "This server does not understand the requested protocol\n"
@@ -1905,7 +1924,7 @@ void ProcessOneRequest(int forceClose, int socketId){
   if( strcmp(zMethod,"GET")!=0 && strcmp(zMethod,"POST")!=0
        && strcmp(zMethod,"HEAD")!=0 ){
     StartResponse("501 Not Implemented");
-    nOut += althttpd_printf(
+    nOut += fprintf(file,
       "Content-type: text/plain; charset=utf-8\r\n"
       "\r\n"
       "The %s method is not implemented on this server.\n",
@@ -2093,11 +2112,12 @@ void ProcessOneRequest(int forceClose, int socketId){
   zQueryString = *zQuerySuffix ? &zQuerySuffix[1] : zQuerySuffix;
 
   /* Create either a memory buffer to hold the POST query data */
+  printf("this seems important\n");
   if( zMethod[0]=='P' && zContentLength!=0 ){
     size_t len = atoi(zContentLength);
     if( len>MAX_CONTENT_LENGTH ){
       StartResponse("500 Request too large");
-      nOut += althttpd_printf(
+      nOut += fprintf(file,
         "Content-type: text/plain; charset=utf-8\r\n"
         "\r\n"
         "Too much POST data\n"
@@ -2283,7 +2303,7 @@ void ProcessOneRequest(int forceClose, int socketId){
   /* After parsing a single successful request.  Disable subsequent timeouts */
   alarm(0);
   useTimeout = 0;
-
+    printf("before if/else statement that sends file\n");
   /* Take appropriate action
   */
   if( (statbuf.st_mode & 0100)==0100 && access(zFile,X_OK)==0 ){ /* CGI */
@@ -2399,13 +2419,16 @@ void ProcessOneRequest(int forceClose, int socketId){
     /* If it isn't executable then it must be a simple file that needs
     ** to be copied to output.
     */
-    if( SendFile(zFile, lenFile, &statbuf) ){
+    printf("attempting to send file\n");
+    if( SendFile(zFile, lenFile, &statbuf, socketId) ){
+      printf("returned from sendfile\n");
       return;
     }
   }
-  althttpd_fflush(stdout);
+  althttpd_fflush(file);
   MakeLogEntry(0, 0);  /* LOG: Normal reply */
   omitLog = 1;
+  printf("reached end of processOneRequest\n");
 }
 
 #define MAX_PARALLEL 50  /* Number of simultaneous children */
@@ -2441,7 +2464,6 @@ int http_server(const char *zPort, int localOnly, int * httpConnection){
   address inaddr;              /* Remote address */
   socklen_t lenaddr;           /* Length of the inaddr structure */
   //int child;                   /* PID of the child process */
-  int nchildren = 0;           /* Number of child processes */
   struct timeval delay;        /* How long to wait inside select() */
   int opt = 1;                 /* setsockopt flag */
   struct addrinfo sHints;      /* Address hints */
@@ -2507,57 +2529,16 @@ int http_server(const char *zPort, int localOnly, int * httpConnection){
   int status, num;                //Textboook code starts here
   //NUMBER_OF_THREADS = 1;
   for(num = 0; num < NUMBER_OF_THREADS; num++) {    //makes the pool of threads
-      printf("before threading\n");
-      status = pthread_create(&threadPool[num], NULL, thread_function, NULL); // PASSING IN NULL INSTEAD OF A START ROUTINE, "SECOND NULL"
-      printf("after threading\n");
+      status = pthread_create(&threadPool[num], NULL, thread_function, (void*)&num); // PASSING IN NULL INSTEAD OF A START ROUTINE, "SECOND NULL"
       if (status != 0) {
           printf("Oops. pthread");
           exit(-1);
-
       }
   }
 
 
 
   while( 1 ) {
-
-      //Theoretical code that we might want to replace the while loop courtesy of jacob sorber
-//      for(i=0; i<n; i++){
-    //      if( FD_ISSET(listener[i], &readfds) ){
-    //          lenaddr = sizeof(inaddr);
-    //          connection = accept(listener[i], &inaddr.sa, &lenaddr); //I THINK WE DEFINITELY WANT TO HAVE THIS CODE SOMEWHERE
-    //          //AND THEN I THINK THAT (FOR NOW) THIS IS WHAT WE SHOULD ENQUEUE
-    //          if( connection>=0 ){
-        //          connection = accept(listener[i], &inaddr.sa, &lenaddr);
-        //          int *pclient = malloc(sizeof(int));
-        //          *pclient = connection;
-        //          pthread_mutex_lock(&mutex);
-        //          insert(pclient);
-        //          pthread_cond_signal(&condition_var);
-        //          pthread_mutex_unlock(&mutex);
-        //          //pthread_detach()
-//                  int nErr = 0, fd;
-//                  close(0);
-//                  fd = dup(connection);
-//                  if( fd!=0 ) nErr++;
-//                  close(1);
-//                  fd = dup(connection);
-//                  if( fd!=1 ) nErr++;
-//                  close(connection);
-//                  *httpConnection = fd;
-//                  return nErr;
-    //          }
-//          }
-//      }
-
-
-
-
-
-    if( nchildren > MAX_PARALLEL ){
-      /* Slow down if connections are arriving too fast */
-      sleep( nchildren-MAX_PARALLEL );
-    }
     delay.tv_sec = 60;
     delay.tv_usec = 0;
     FD_ZERO(&readfds);
@@ -2577,7 +2558,14 @@ int http_server(const char *zPort, int localOnly, int * httpConnection){
               int *pclient = malloc(sizeof(int));
               *pclient = connection;
               pthread_mutex_lock(&mutex);
-              insert(pclient);
+              if(isFull()) {
+                  printf("buffer is full, waiting to insert\n");
+                  pthread_cond_wait(&condition_var, &mutex);
+                  printf("done waiting\n");
+              }
+              printf("inserting data in http_server\n");
+              insert(pclient);      //INSERTING INTO BUFFER
+              printf("data inserted: %d,\n item count: %d,\n", *peek(),size());
               pthread_cond_signal(&condition_var);
               pthread_mutex_unlock(&mutex);
             //pthread_detach();
@@ -2585,7 +2573,7 @@ int http_server(const char *zPort, int localOnly, int * httpConnection){
 //            close(0);
 //            fd = dup(connection);
 //            if( fd!=0 )
-//                nErr++;
+//             nErr++;
 //            close(1);
 //            fd = dup(connection);
 //            if( fd!=1 )
@@ -2595,54 +2583,37 @@ int http_server(const char *zPort, int localOnly, int * httpConnection){
             return nErr;
           }
         }
-
-//      if( FD_ISSET(listener[i], &readfds) ){
-//        lenaddr = sizeof(inaddr);
-//        connection = accept(listener[i], &inaddr.sa, &lenaddr); //I THINK WE DEFINITELY WANT TO HAVE THIS CODE SOMEWHERE
-//                                                                //AND THEN I THINK THAT (FOR NOW) THIS IS WHAT WE SHOULD ENQUEUE
-//        if( connection>=0 ){
-//          child = fork();
-//          if( child!=0 ){
-//            if( child>0 ) nchildren++;
-//            close(connection);
-//            /* printf("subprocess %d started...\n", child); fflush(stdout); */
-//          }else{
-//            int nErr = 0, fd;
-//            close(0);
-//            fd = dup(connection);
-//            if( fd!=0 ) nErr++;
-//            close(1);
-//            fd = dup(connection);
-//            if( fd!=1 ) nErr++;
-//            close(connection);
-//            *httpConnection = fd;
-//            return nErr;
-//          }
-//        }
-//      }
-//      /* Bury dead children */
-//      while( (child = waitpid(0, 0, WNOHANG))>0 ){
-//        /* printf("process %d ends\n", child); fflush(stdout); */
-//        nchildren--;
-//      }
     }
   }
   /* NOT REACHED */  
   exit(1);
 }
 void * thread_function(void *arg){
+    int *myid = (int *)arg;
+    //printf("in thread function");
     while(1){
+
         int *pclient;
         pthread_mutex_lock(&mutex);
 
-        if ((pclient = removeData()) == NULL){
+        if (isEmpty()) {
+            //printf("buffer is EMPTY, waiting to remove, thread ID: %d\n", *myid);
             pthread_cond_wait(&condition_var, &mutex);
-            pclient =  removeData();
+            printf("onto removing, thread ID: %d\n", *myid);
         }
+            pclient = removeData();
+            printf("removed data, thread ID: %d\n", *myid);
+            ProcessOneRequest(0, *pclient);
+            printf("processed one request\n");
+            pthread_cond_signal(&condition_var);
+            printf("just released signal, about to unlock");
+
+
         pthread_mutex_unlock(&mutex);
-        if (pclient != NULL){
-            //handles the connection
-        }
+        printf("unlocked\n");
+//        if (pclient != NULL){
+//            //handles the connection
+//        }
     }
 }
 
@@ -2690,7 +2661,7 @@ int* removeData() {    //REMOVE FROM QUEUE
 }                     //END OF QUEUE
 
 int main(int argc, const char **argv){
-  int i;                     /* Loop counter */
+  //int i;                     /* Loop counter */
   const char *zPermUser = 0; /* Run daemon with this user's permissions */
   const char *zPort = 0;     /* Implement an HTTP server on this port */
   int useChrootJail = 1;     /* True to use a change-root jail */
@@ -2750,7 +2721,7 @@ int main(int argc, const char **argv){
         threadPool = malloc ( NUMBER_OF_THREADS * sizeof *threadPool );
     }else if( strcmp(z, "-buffers")==0 ){     // WHERE WE GET NUMBER OF BUFFERS
         buffers = atoi(zArg);
-        intArray = malloc (buffers * sizeof *intArray); //Initializes the size of queue
+        intArray = calloc (buffers,sizeof(*intArray)); //Initializes the size of queue
     }
     else if( strcmp(z, "-debug")==0 ){
       if( atoi(zArg) ){
@@ -2868,11 +2839,14 @@ int main(int argc, const char **argv){
     zRemoteAddr += 7;
   }
   zServerSoftware = useHttps==2 ? SERVER_SOFTWARE_TLS : SERVER_SOFTWARE;
-  /* Process the input stream */
-  for(i=0; i<100; i++){
-    ProcessOneRequest(0, httpConnection);
-  }
+
+    pthread_mutex_lock(&mutex);
+    if(!isEmpty()){
+        pthread_cond_wait(&condition_var, &mutex);
+    }
+    printf("closing ProcessOneRequest\n");
   ProcessOneRequest(1, httpConnection);
+    pthread_mutex_unlock(&mutex);
   tls_close_conn();
   exit(0);
 }
