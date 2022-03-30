@@ -708,7 +708,7 @@ static char *Rfc822Date(time_t t){
 ** The date is determined from the unix timestamp given.
 */
 static int DateTag(const char *zTag, time_t t){
-  return althttpd_printf("%s: %s\r\n", zTag, Rfc822Date(t));
+  return fprintf(file,"%s: %s\r\n", zTag, Rfc822Date(t));
 }
 
 /*
@@ -787,7 +787,7 @@ static void StartResponse(const char *zResultCode){
 */
 static void NotFound(int lineno){
   StartResponse("404 Not Found");
-  nOut += althttpd_printf(
+  nOut += fprintf(file,
     "Content-type: text/html; charset=utf-8\r\n"
     "\r\n"
     "<head><title lineno=\"%d\">Not Found</title></head>\n"
@@ -803,7 +803,7 @@ static void NotFound(int lineno){
 */
 static void Forbidden(int lineno){
   StartResponse("403 Forbidden");
-  nOut += althttpd_printf(
+  nOut += fprintf(file,
     "Content-type: text/plain; charset=utf-8\r\n"
     "\r\n"
     "Access denied\n"
@@ -819,7 +819,7 @@ static void Forbidden(int lineno){
 */
 static void NotAuthorized(const char *zRealm){
   StartResponse("401 Authorization Required");
-  nOut += althttpd_printf(
+  nOut += fprintf(file,
     "WWW-Authenticate: Basic realm=\"%s\"\r\n"
     "Content-type: text/html; charset=utf-8\r\n"
     "\r\n"
@@ -835,7 +835,7 @@ static void NotAuthorized(const char *zRealm){
 */
 static void CgiError(void){
   StartResponse("500 Error");
-  nOut += althttpd_printf(
+  nOut += fprintf(file,
     "Content-type: text/html; charset=utf-8\r\n"
     "\r\n"
     "<head><title>CGI Program Error</title></head>\n"
@@ -870,7 +870,7 @@ static void Timeout(int iSig){
 */
 static void CgiScriptWritable(void){
   StartResponse("500 CGI Configuration Error");
-  nOut += althttpd_printf(
+  nOut += fprintf(file,
     "Content-type: text/plain; charset=utf-8\r\n"
     "\r\n"
     "The CGI program %s is writable by users other than its owner.\n",
@@ -886,13 +886,13 @@ void Malfunction(int linenum, const char *zFormat, ...){
   va_list ap;
   va_start(ap, zFormat);
   StartResponse("500 Server Malfunction");
-  nOut += althttpd_printf(
+  nOut += fprintf(file,
     "Content-type: text/plain; charset=utf-8\r\n"
     "\r\n"
     "Web server malfunctioned; error number %d\n\n", linenum);
   if( zFormat ){
     nOut += althttpd_vprintf(zFormat, ap);
-    althttpd_printf("\n");
+    fprintf(file,"\n");
     nOut++;
   }
   va_end(ap);
@@ -918,18 +918,18 @@ static void Redirect(const char *zPath, int iStatus, int finish, int lineno){
       break;
   }
   if( zServerPort==0 || zServerPort[0]==0 || strcmp(zServerPort,"80")==0 ){
-    nOut += althttpd_printf("Location: %s://%s%s%s\r\n",
+    nOut += fprintf(file,"Location: %s://%s%s%s\r\n",
                    zHttpScheme, zServerName, zPath, zQuerySuffix);
   }else{
-    nOut += althttpd_printf("Location: %s://%s:%s%s%s\r\n",
+    nOut += fprintf(file,"Location: %s://%s:%s%s%s\r\n",
                    zHttpScheme, zServerName, zServerPort, zPath, zQuerySuffix);
   }
   if( finish ){
-    nOut += althttpd_printf("Content-length: 0\r\n");
-    nOut += althttpd_printf("\r\n");
+    nOut += fprintf(file,"Content-length: 0\r\n");
+    nOut += fprintf(file,"\r\n");
     MakeLogEntry(0, lineno);
   }
-  fflush(stdout);
+  fflush(file);
 }
 
 /*
@@ -1574,7 +1574,7 @@ static void CgiHandleReply(FILE *in, int isNPH){
     ** need to go through this routine, instead of simply exec()'ing,
     ** in order to go through the TLS output channel.
     */
-    stream_file(in, stdout);
+    stream_file(in, file);
     fclose(in);
     return;
   }
@@ -1627,7 +1627,7 @@ static void CgiHandleReply(FILE *in, int isNPH){
   }
   if( nRes>0 ){
     aRes[nRes] = 0;
-    althttpd_fwrite(aRes, nRes, 1, stdout);
+    althttpd_fwrite(aRes, nRes, 1, file);
     nOut += nRes;
     nRes = 0;
   }
@@ -1635,7 +1635,7 @@ static void CgiHandleReply(FILE *in, int isNPH){
     nOut += fprintf(file,"\r\n\r\n");
   }else if( seenContentLength ){
     nOut += fprintf(file,"Content-length: %d\r\n\r\n", contentLength);
-    xferBytes(in, stdout, contentLength, rangeStart);
+    xferBytes(in, file, contentLength, rangeStart);
   }else{
     while( (c = getc(in))!=EOF ){
       if( nRes>=nMalloc ){
@@ -1650,7 +1650,7 @@ static void CgiHandleReply(FILE *in, int isNPH){
     if( nRes ){
       aRes[nRes] = 0;
       nOut += fprintf(file,"Content-length: %d\r\n\r\n", (int)nRes);
-      nOut += althttpd_fwrite(aRes, nRes, 1, stdout);
+      nOut += althttpd_fwrite(aRes, nRes, 1, file);
     }else{
       nOut += fprintf(file,"Content-length: 0\r\n\r\n");
     }
@@ -1851,12 +1851,13 @@ void ProcessOneRequest(int forceClose, int socketId){
   char *z;                  /* Used to parse up a string */
   struct stat statbuf;      /* Information about the file to be retrieved */
   FILE *in;                 /* For reading from CGI scripts */
-  printf("opening file\n");
-  file =fdopen(socketId, "r+");
-    printf("file opened\n");
+
 #ifdef LOG_HEADER
   FILE *hdrLog = 0;         /* Log file for complete header content */
 #endif
+    printf("opening file\n");
+    file =fdopen(socketId, "r+");
+    printf("file opened\n");
   char zLine[1000];         /* A buffer for input lines or forming names */
 
   /* Change directories to the root of the HTTP filesystem
@@ -1882,9 +1883,9 @@ void ProcessOneRequest(int forceClose, int socketId){
   ** method, the script and the protocol.
   */
   omitLog = 1;
-  if( althttpd_fgets(zLine,sizeof(zLine),stdin)==0 ){
+  if( althttpd_fgets(zLine,sizeof(zLine),file)==0 ){
       printf("I found the spot that it stops!\n");
-    exit(0);
+    //exit(0);
   } else {
       printf("or did i?\n");
   }
@@ -1961,7 +1962,7 @@ void ProcessOneRequest(int forceClose, int socketId){
   zIfModifiedSince = 0;
   zContentLength = 0;
   rangeEnd = 0;
-  while( althttpd_fgets(zLine,sizeof(zLine),stdin) ){
+  while( althttpd_fgets(zLine,sizeof(zLine),file) ){
     char *zFieldName;
     char *zVal;
 
@@ -2128,7 +2129,7 @@ void ProcessOneRequest(int forceClose, int socketId){
     rangeEnd = 0;
     zPostData = SafeMalloc( len+1 );
     if( useTimeout ) alarm(15 + len/2000);
-    nPostData = althttpd_fread(zPostData,1,len,stdin);
+    nPostData = althttpd_fread(zPostData,1,len,file);
     nIn += nPostData;
   }
 
@@ -2596,7 +2597,7 @@ void * thread_function(void *arg){
         int *pclient;
         pthread_mutex_lock(&mutex);
 
-        if (isEmpty()) {
+        while(isEmpty()) {
             //printf("buffer is EMPTY, waiting to remove, thread ID: %d\n", *myid);
             pthread_cond_wait(&condition_var, &mutex);
             printf("onto removing, thread ID: %d\n", *myid);
@@ -2605,7 +2606,7 @@ void * thread_function(void *arg){
             printf("removed data, thread ID: %d\n", *myid);
             ProcessOneRequest(0, *pclient);
             printf("processed one request\n");
-            pthread_cond_signal(&condition_var);
+            //pthread_cond_signal(&condition_var);
             printf("just released signal, about to unlock");
 
 
@@ -2841,9 +2842,9 @@ int main(int argc, const char **argv){
   zServerSoftware = useHttps==2 ? SERVER_SOFTWARE_TLS : SERVER_SOFTWARE;
 
     pthread_mutex_lock(&mutex);
-    if(!isEmpty()){
-        pthread_cond_wait(&condition_var, &mutex);
-    }
+//    if(!isEmpty()){
+//        pthread_cond_wait(&condition_var, &mutex);
+//    }
     printf("closing ProcessOneRequest\n");
   ProcessOneRequest(1, httpConnection);
     pthread_mutex_unlock(&mutex);
